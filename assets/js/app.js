@@ -47,7 +47,7 @@ function initNavigation() {
             // Reload data for pages
             if (page === 'clients') loadClientsTable();
             if (page === 'reports') loadReportServiceFilter();
-            if (page === 'settings') { loadUsersManager(); loadServicesManager(); loadWaTemplate(); loadRiadCredentials(); loadRiadConfigManager(); }
+            if (page === 'settings') { loadUsersManager(); loadServicesManager(); loadWaTemplate(); loadRiadSession(); loadRiadConfigManager(); }
             // Close mobile menu
             document.getElementById('sidebar').classList.remove('open');
         });
@@ -1114,38 +1114,33 @@ async function resetWaTemplate() {
 }
 
 // =====================
-// SETTINGS - RIAD CREDENTIALS
+// SETTINGS - RIAD SESSION
 // =====================
-async function loadRiadCredentials() {
+async function loadRiadSession() {
     if (APP_ROLE !== 'admin') return;
     try {
-        const data = await api('api/riad-proxy.php?action=get_credentials');
+        const data = await api('api/riad-proxy.php?action=get_session');
         const codeInput = document.getElementById('riadCodeEs');
-        const userInput = document.getElementById('riadUsername');
-        const passInput = document.getElementById('riadPassword');
+        const sessionInput = document.getElementById('riadSessionId');
         if (codeInput && data.code_es) codeInput.value = data.code_es;
-        if (userInput && data.username) userInput.value = data.username;
-        if (passInput && data.has_password) passInput.placeholder = '••••••• (محفوظة)';
+        if (sessionInput && data.session_id) sessionInput.value = data.session_id;
     } catch (e) { /* ignore */ }
 }
 
-async function saveRiadCredentials() {
+async function saveRiadSession() {
     const code = document.getElementById('riadCodeEs').value.trim();
-    const username = document.getElementById('riadUsername').value.trim();
-    const password = document.getElementById('riadPassword').value;
+    const sessionId = document.getElementById('riadSessionId').value.trim();
 
-    if (!code || !username) {
-        showToast('أدخل كود المحل واسم المستخدم على الأقل', 'error');
+    if (!code || !sessionId) {
+        showToast('أدخل كود المحل وكوكي الجلسة', 'error');
         return;
     }
 
-    await api('api/riad-proxy.php?action=save_credentials', {
+    await api('api/riad-proxy.php?action=save_session', {
         method: 'POST',
-        body: JSON.stringify({ code_es: code, username: username, password: password })
+        body: JSON.stringify({ code_es: code, session_id: sessionId })
     });
     showToast('تم حفظ بيانات الاتصال بنجاح', 'success');
-    document.getElementById('riadPassword').value = '';
-    document.getElementById('riadPassword').placeholder = '••••••• (محفوظة)';
 }
 
 async function testRiadConnection() {
@@ -1157,21 +1152,9 @@ async function testRiadConnection() {
 
     try {
         // Save first
-        const code = document.getElementById('riadCodeEs').value.trim();
-        const username = document.getElementById('riadUsername').value.trim();
-        const password = document.getElementById('riadPassword').value;
+        await saveRiadSession();
 
-        if (!code || !username) {
-            status.innerHTML = '<div style="color:var(--danger);font-weight:600;padding:10px;background:#fef2f2;border-radius:8px;"><i class="fas fa-times-circle"></i> أكمل كود المحل واسم المستخدم أولاً</div>';
-            return;
-        }
-
-        await api('api/riad-proxy.php?action=save_credentials', {
-            method: 'POST',
-            body: JSON.stringify({ code_es: code, username: username, password: password })
-        });
-
-        // Then test login
+        // Then test
         const result = await api('api/riad-proxy.php?action=test');
         if (result.success) {
             status.innerHTML = `<div style="color:var(--success);font-weight:600;padding:12px;background:#f0fdf4;border-radius:8px;display:flex;align-items:center;gap:8px;">

@@ -201,7 +201,7 @@ $fullName = $_SESSION['full_name'];
                             بيانات الاتصال بـ RIAD
                         </h4>
                         <p style="color:#919294;font-size:13px;margin-bottom:15px;">
-                            أدخل بيانات حساب RIAD (riad.m2t.ma). النظام يسجل الدخول تلقائياً ويستخرج الفواتير.
+                            أدخل كود المحل وكوكي الجلسة من المتصفح. هذه الطريقة <strong>لا تحجز مكان إضافي</strong> في الأجهزة المسموحة.
                         </p>
                         <div class="form-row" style="margin-bottom:10px;">
                             <div class="form-group" style="margin-bottom:0;">
@@ -209,25 +209,26 @@ $fullName = $_SESSION['full_name'];
                                 <input type="text" id="riadCodeEs" placeholder="مثال: 006581" style="direction:ltr;text-align:left;font-weight:700;font-size:16px;">
                             </div>
                             <div class="form-group" style="margin-bottom:0;">
-                                <label>اسم المستخدم (Identifiant) *</label>
-                                <input type="text" id="riadUsername" placeholder="Identifiant RIAD" style="direction:ltr;text-align:left;">
+                                <label>كوكي الجلسة (X-SESSIONID) *</label>
+                                <input type="text" id="riadSessionId" placeholder="انسخه من المتصفح وأنت مسجل الدخول" style="direction:ltr;text-align:left;">
                             </div>
                         </div>
-                        <div class="form-row" style="margin-bottom:15px;">
-                            <div class="form-group" style="margin-bottom:0;">
-                                <label>كلمة المرور (Mot de passe) *</label>
-                                <input type="password" id="riadPassword" placeholder="••••••••" style="direction:ltr;text-align:left;">
-                            </div>
-                            <div class="form-group" style="margin-bottom:0;display:flex;align-items:flex-end;gap:8px;">
-                                <button class="btn btn-primary" onclick="saveRiadCredentials()" style="height:44px;flex:1;">
-                                    <i class="fas fa-save"></i> حفظ
-                                </button>
-                                <button class="btn btn-success" onclick="testRiadConnection()" style="height:44px;flex:1;" id="riadTestBtn">
-                                    <i class="fas fa-plug"></i> اختبار الاتصال
-                                </button>
-                            </div>
+                        <div style="display:flex;gap:8px;margin-bottom:15px;flex-wrap:wrap;">
+                            <button class="btn btn-primary" onclick="saveRiadSession()" style="height:44px;">
+                                <i class="fas fa-save"></i> حفظ
+                            </button>
+                            <button class="btn btn-success" onclick="testRiadConnection()" style="height:44px;" id="riadTestBtn">
+                                <i class="fas fa-plug"></i> اختبار الاتصال
+                            </button>
                         </div>
                         <div id="riadConnectionStatus"></div>
+
+                        <!-- Quick info box -->
+                        <div style="background:#e0f2fe;border-radius:8px;padding:12px;margin-top:10px;font-size:12px;color:#0369a1;line-height:1.8;">
+                            <strong><i class="fas fa-lightbulb"></i> طريقة سريعة:</strong>
+                            سجّل الدخول في riad.m2t.ma ← اضغط F12 ← Application ← Cookies ← انسخ قيمة <code>X-SESSIONID</code>
+                            <br>⚠️ الجلسة تنتهي عند تسجيل الخروج. أعد النسخ عند الحاجة.
+                        </div>
                     </div>
 
                     <!-- Step 2: Services Mapping -->
@@ -254,18 +255,21 @@ $fullName = $_SESSION['full_name'];
                         <div style="padding:15px;background:#fffbeb;border-radius:8px;margin-top:10px;font-size:13px;line-height:2;">
                             <strong>1. كود المحل (x-code-es):</strong><br>
                             &nbsp;&nbsp;• سجّل الدخول في <a href="https://riad.m2t.ma" target="_blank" style="color:var(--primary);">riad.m2t.ma</a><br>
-                            &nbsp;&nbsp;• اضغط F12 لفتح أدوات المطور<br>
-                            &nbsp;&nbsp;• اذهب إلى تبويب <strong>Network</strong><br>
-                            &nbsp;&nbsp;• قم بأي عملية بحث عن فاتورة<br>
-                            &nbsp;&nbsp;• اضغط على أي طلب → Headers → ابحث عن <code>x-code-es</code><br>
+                            &nbsp;&nbsp;• اضغط F12 ← تبويب <strong>Network</strong> ← ابحث عن فاتورة<br>
+                            &nbsp;&nbsp;• اضغط على أي طلب ← Headers ← ابحث عن <code>x-code-es</code><br>
                             <br>
-                            <strong>2. معرّف الخدمة (Operator Service ID):</strong><br>
-                            &nbsp;&nbsp;• في نفس صفحة Network<br>
-                            &nbsp;&nbsp;• ابحث عن طلبات <code>billings/unpaid</code><br>
-                            &nbsp;&nbsp;• ستجد المعرّف في URL الطلب بعد <code>operatorServiceId=</code><br>
+                            <strong>2. كوكي الجلسة (X-SESSIONID):</strong><br>
+                            &nbsp;&nbsp;• وأنت مسجل الدخول في riad.m2t.ma<br>
+                            &nbsp;&nbsp;• اضغط F12 ← تبويب <strong>Application</strong> ← <strong>Cookies</strong> ← riad-api.m2t.ma<br>
+                            &nbsp;&nbsp;• انسخ قيمة <code>X-SESSIONID</code><br>
+                            &nbsp;&nbsp;• ⚠️ <strong>مهم:</strong> الجلسة تنتهي عند تسجيل الخروج أو بعد مدة. أعد النسخ إذا توقف الاستخراج.<br>
                             <br>
-                            <strong>3. Search Criteria:</strong><br>
-                            &nbsp;&nbsp;• <strong>6</strong> = عداد كهرباء ONEE (nopolice عادي)<br>
+                            <strong>3. معرّف الخدمة (Operator Service ID):</strong><br>
+                            &nbsp;&nbsp;• في Network ← ابحث عن <code>billings/unpaid</code><br>
+                            &nbsp;&nbsp;• المعرّف في URL بعد <code>operatorServiceId=</code><br>
+                            <br>
+                            <strong>4. Search Criteria:</strong><br>
+                            &nbsp;&nbsp;• <strong>6</strong> = عداد كهرباء ONEE<br>
                             &nbsp;&nbsp;• <strong>1</strong> = عداد ماء أو خدمات أخرى
                         </div>
                     </details>

@@ -44,99 +44,17 @@ function setRiadSetting($key, $value) {
 }
 
 function getRiadCodeEs() { return getRiadSetting('code_es'); }
-function setRiadCodeEs($code) { setRiadSetting('code_es', $code); }
-function getRiadCredentials() {
-    return [
-        'code_es' => getRiadSetting('code_es'),
-        'username' => getRiadSetting('username'),
-        'password' => getRiadSetting('password'),
-    ];
-}
 
-// ----- Riad Session Management -----
-// Login to RIAD and get session cookie
-function riadLogin() {
-    $creds = getRiadCredentials();
-    if (empty($creds['code_es']) || empty($creds['username']) || empty($creds['password'])) {
-        return ['success' => false, 'error' => 'بيانات الاتصال غير مكتملة. اذهب للإعدادات وأدخل كود المحل + اسم المستخدم + كلمة المرور.'];
-    }
-
-    $ch = curl_init(RIAD_API_BASE . '/auth/login');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => json_encode([
-            'username' => $creds['username'],
-            'password' => $creds['password']
-        ]),
-        CURLOPT_HTTPHEADER => [
-            'Accept: application/json, text/plain, */*',
-            'Content-Type: application/json;charset=UTF-8',
-            'x-code-es: ' . $creds['code_es'],
-            'Origin: https://riad.m2t.ma',
-        ],
-        CURLOPT_TIMEOUT => 15,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_HEADER => true,
-    ]);
-
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-    $headers = substr($response, 0, $headerSize);
-    $body = substr($response, $headerSize);
-    $error = curl_error($ch);
-    curl_close($ch);
-
-    if ($error) {
-        return ['success' => false, 'error' => 'خطأ في الاتصال: ' . $error];
-    }
-
-    // Extract session cookie
-    $sessionId = '';
-    if (preg_match('/set-cookie:\s*X-SESSIONID=([^;]+)/i', $headers, $m)) {
-        $sessionId = $m[1];
-    }
-
-    if ($httpCode >= 200 && $httpCode < 300 && $sessionId) {
-        // Save session
-        setRiadSetting('session_id', $sessionId);
-        $data = json_decode($body, true);
-        return ['success' => true, 'session_id' => $sessionId, 'data' => $data];
-    } elseif ($httpCode === 401) {
-        return ['success' => false, 'error' => 'اسم المستخدم أو كلمة المرور غير صحيحة (HTTP 401)'];
-    } else {
-        return ['success' => false, 'error' => 'خطأ غير متوقع (HTTP ' . $httpCode . ')', 'body' => substr($body, 0, 200)];
-    }
-}
-
-// Get active session (login if needed)
+// ----- Riad Session (copied from browser) -----
 function getRiadSession() {
-    $session = getRiadSetting('session_id');
-    if (!empty($session)) {
-        // Test if session still valid
-        $creds = getRiadCredentials();
-        $ch = curl_init(RIAD_API_BASE . '/auth/current');
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Accept: application/json',
-                'x-code-es: ' . $creds['code_es'],
-                'Cookie: X-SESSIONID=' . $session,
-            ],
-            CURLOPT_TIMEOUT => 8,
-            CURLOPT_SSL_VERIFYPEER => false,
-        ]);
-        $resp = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+    $codeEs = getRiadSetting('code_es');
+    $sessionId = getRiadSetting('session_id');
 
-        if ($code >= 200 && $code < 300) {
-            return ['success' => true, 'session_id' => $session];
-        }
+    if (empty($codeEs) || empty($sessionId)) {
+        return ['success' => false, 'error' => 'بيانات الاتصال غير مكتملة. اذهب للإعدادات وأدخل كود المحل + كوكي الجلسة.'];
     }
-    // Session expired or doesn't exist - login again
-    return riadLogin();
+
+    return ['success' => true, 'session_id' => $sessionId, 'code_es' => $codeEs];
 }
 
 // Operator service IDs mapped to our service types
@@ -301,55 +219,68 @@ switch ($action) {
         echo json_encode(['success' => true]);
         break;
 
-    // Get saved credentials (without password)
-    case 'get_credentials':
+    // Get saved session info
+    case 'get_session':
         requireAdmin();
-        $creds = getRiadCredentials();
         echo json_encode([
-            'code_es' => $creds['code_es'],
-            'username' => $creds['username'],
-            'has_password' => !empty($creds['password']),
+            'code_es' => getRiadSetting('code_es'),
+            'session_id' => getRiadSetting('session_id'),
         ]);
         break;
 
-    // Save all credentials
-    case 'save_credentials':
+    // Save session info
+    case 'save_session':
         requireAdmin();
         $data = json_decode(file_get_contents('php://input'), true);
         $code = trim($data['code_es'] ?? '');
-        $username = trim($data['username'] ?? '');
-        $password = $data['password'] ?? '';
+        $sessionId = trim($data['session_id'] ?? '');
 
-        if (empty($code) || empty($username)) {
+        if (empty($code) || empty($sessionId)) {
             http_response_code(400);
-            echo json_encode(['error' => 'كود المحل واسم المستخدم مطلوبان']);
+            echo json_encode(['error' => 'كود المحل وكوكي الجلسة مطلوبان']);
             break;
         }
 
         setRiadSetting('code_es', $code);
-        setRiadSetting('username', $username);
-        if (!empty($password)) {
-            setRiadSetting('password', $password);
-        }
-        // Clear old session
-        setRiadSetting('session_id', '');
-
+        setRiadSetting('session_id', $sessionId);
         echo json_encode(['success' => true]);
         break;
 
-    // Test connection (full login)
+    // Test connection
     case 'test':
         requireAdmin();
-        $creds = getRiadCredentials();
-        if (empty($creds['code_es']) || empty($creds['username']) || empty($creds['password'])) {
-            echo json_encode(['success' => false, 'error' => 'أكمل جميع البيانات أولاً (كود المحل + اسم المستخدم + كلمة المرور)']);
+        $codeEs = getRiadSetting('code_es');
+        $sessionId = getRiadSetting('session_id');
+
+        if (empty($codeEs) || empty($sessionId)) {
+            echo json_encode(['success' => false, 'error' => 'أدخل كود المحل وكوكي الجلسة أولاً']);
             break;
         }
-        $result = riadLogin();
-        if ($result['success']) {
-            echo json_encode(['success' => true, 'message' => 'تسجيل الدخول ناجح! الاتصال يعمل.']);
+
+        $ch = curl_init(RIAD_API_BASE . '/auth/current');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Accept: application/json',
+                'x-code-es: ' . $codeEs,
+                'Cookie: X-SESSIONID=' . $sessionId,
+            ],
+            CURLOPT_TIMEOUT => 10,
+            CURLOPT_SSL_VERIFYPEER => false,
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error) {
+            echo json_encode(['success' => false, 'error' => 'خطأ في الاتصال: ' . $error]);
+        } elseif ($httpCode === 401 || $httpCode === 403) {
+            echo json_encode(['success' => false, 'error' => 'الجلسة منتهية أو غير صالحة. أعد نسخ كوكي الجلسة من المتصفح.']);
+        } elseif ($httpCode >= 200 && $httpCode < 300) {
+            echo json_encode(['success' => true, 'message' => 'الاتصال ناجح! الجلسة صالحة.']);
         } else {
-            echo json_encode($result);
+            echo json_encode(['success' => false, 'error' => 'استجابة غير متوقعة (HTTP ' . $httpCode . ')']);
         }
         break;
 
