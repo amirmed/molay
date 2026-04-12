@@ -117,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <i class="fas fa-sign-in-alt"></i> تسجيل الدخول
             </button>
         </form>
-        <div class="login-footer">admin / admin123 :الدخول الافتراضي</div>
+        <div class="login-footer">Moulay Chaabi &copy; <?= date('Y') ?></div>
     </div>
 </body>
 </html>

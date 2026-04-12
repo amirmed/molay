@@ -127,6 +127,7 @@ switch ($action) {
 
     // Mark invoice as paid
     case 'mark_paid':
+        requireAdmin();
         $id = (int)($_GET['id'] ?? 0);
         $isPaid = (int)($_GET['paid'] ?? 1);
         $stmt = $db->prepare("UPDATE invoices SET is_paid = ?, paid_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id = ?");

@@ -274,12 +274,20 @@ async function saveAllInvoices() {
         }
     });
 
-    await api('api/invoices.php?action=save_batch', {
-        method: 'POST',
-        body: JSON.stringify({ invoices })
-    });
-    showToast('تم حفظ الفواتير بنجاح', 'success');
-    loadSummary();
+    // Loading state
+    const btns = document.querySelectorAll('.invoice-actions .btn-primary');
+    btns.forEach(b => { b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري الحفظ...'; });
+
+    try {
+        await api('api/invoices.php?action=save_batch', {
+            method: 'POST',
+            body: JSON.stringify({ invoices })
+        });
+        showToast('تم حفظ الفواتير بنجاح', 'success');
+        loadSummary();
+    } catch(e) { /* toast shown by api() */ }
+
+    btns.forEach(b => { b.disabled = false; b.innerHTML = '<i class="fas fa-save"></i> حفظ الفواتير'; });
 }
 
 // =====================
@@ -456,21 +464,27 @@ async function saveClient() {
         }
     });
 
-    await api('api/clients.php?action=save', {
-        method: 'POST',
-        body: JSON.stringify({
-            id: id || 0,
-            full_name: name,
-            phone: document.getElementById('clientPhone').value.trim(),
-            address: document.getElementById('clientAddress').value.trim(),
-            notes: document.getElementById('clientNotes').value.trim(),
-            meters: meters
-        })
-    });
+    const saveBtn = document.querySelector('#clientModal .btn-primary');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري الحفظ...'; }
 
-    showToast(id ? 'تم تحديث العميل بنجاح' : 'تم إضافة العميل بنجاح', 'success');
-    closeModal('clientModal');
-    loadClientsTable();
+    try {
+        await api('api/clients.php?action=save', {
+            method: 'POST',
+            body: JSON.stringify({
+                id: id || 0,
+                full_name: name,
+                phone: document.getElementById('clientPhone').value.trim(),
+                address: document.getElementById('clientAddress').value.trim(),
+                notes: document.getElementById('clientNotes').value.trim(),
+                meters: meters
+            })
+        });
+        showToast(id ? 'تم تحديث العميل بنجاح' : 'تم إضافة العميل بنجاح', 'success');
+        closeModal('clientModal');
+        loadClientsTable();
+    } catch(e) { /* toast shown by api() */ }
+
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fas fa-save"></i> حفظ'; }
 }
 
 async function deleteClient(id) {

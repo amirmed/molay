@@ -299,7 +299,7 @@ function callRiadAPI($nopolice, $operatorServiceId, $searchCriteria = '6') {
         return $sessionResult;
     }
 
-    $creds = getRiadCredentials();
+    $codeEs = $sessionResult['code_es'] ?? getRiadSetting('code_es');
     $sessionId = $sessionResult['session_id'];
     $url = RIAD_API_BASE . '/billings/unpaid?operatorServiceId=' . urlencode($operatorServiceId);
 
@@ -328,7 +328,7 @@ function callRiadAPI($nopolice, $operatorServiceId, $searchCriteria = '6') {
         CURLOPT_HTTPHEADER => [
             'Accept: application/json, text/plain, */*',
             'Content-Type: application/json;charset=UTF-8',
-            'x-code-es: ' . $creds['code_es'],
+            'x-code-es: ' . $codeEs,
             'Cookie: X-SESSIONID=' . $sessionId,
         ],
         CURLOPT_TIMEOUT => 15,
