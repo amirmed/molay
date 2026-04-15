@@ -72,9 +72,21 @@ function initDB() {
             UNIQUE(meter_id, month, year)
         );
 
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER,
+            user_id INTEGER,
+            user_name TEXT,
+            details TEXT DEFAULT '',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE INDEX IF NOT EXISTS idx_meters_client ON meters(client_id);
         CREATE INDEX IF NOT EXISTS idx_invoices_meter ON invoices(meter_id);
         CREATE INDEX IF NOT EXISTS idx_invoices_period ON invoices(year, month);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
     ");
 
     // Insert default service types if empty

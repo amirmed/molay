@@ -6,6 +6,7 @@
 let serviceTypes = [];
 let currentClient = null;
 let searchTimeout = null;
+let riadSessionExpired = false; // tracks RIAD session state
 
 const MONTHS_AR = ['', 'يناير', 'فبراير', 'مارس', 'أبريل', 'ماي', 'يونيو', 'يوليوز', 'غشت', 'شتنبر', 'أكتوبر', 'نونبر', 'دجنبر'];
 
@@ -47,7 +48,7 @@ function initNavigation() {
             // Reload data for pages
             if (page === 'clients') loadClientsTable();
             if (page === 'reports') loadReportServiceFilter();
-            if (page === 'settings') { loadUsersManager(); loadServicesManager(); loadWaTemplate(); loadRiadSession(); loadRiadConfigManager(); }
+            if (page === 'settings') { loadUsersManager(); loadServicesManager(); loadWaTemplate(); loadRiadSession(); loadRiadConfigManager(); loadAuditLog(); }
             // Close mobile menu
             document.getElementById('sidebar').classList.remove('open');
         });
@@ -232,18 +233,54 @@ async function loadClientInvoices(clientId) {
     const year = getSelectedYear();
     const invoices = await api(`api/invoices.php?action=get_client&client_id=${clientId}&month=${month}&year=${year}`);
 
-    // Fill amounts
+    // Fill amounts and payment status
     if (currentClient && currentClient.meters) {
         currentClient.meters.forEach(m => {
             const input = document.getElementById(`amount-${m.id}`);
             if (input) {
                 const inv = invoices.find(i => i.meter_id == m.id);
                 input.value = inv ? inv.amount : '';
+
+                // Update paid status badge on meter card
+                const card = document.getElementById(`meter-card-${m.id}`);
+                if (card) {
+                    // Remove old status
+                    const old = card.querySelector('.meter-paid-status');
+                    if (old) old.remove();
+
+                    if (inv) {
+                        const badge = document.createElement('div');
+                        badge.className = 'meter-paid-status';
+                        badge.style.cssText = 'margin-top:6px;display:flex;align-items:center;gap:6px;';
+                        if (APP_ROLE === 'admin') {
+                            badge.innerHTML = `
+                                <button class="btn btn-sm ${inv.is_paid ? 'btn-success' : 'btn-danger'}"
+                                    style="font-size:11px;padding:3px 10px;border-radius:20px;"
+                                    onclick="toggleInvoicePaid(${inv.id}, ${inv.is_paid ? 0 : 1}, ${clientId})"
+                                    title="${inv.is_paid ? 'تحديد كغير مدفوعة' : 'تحديد كمدفوعة'}">
+                                    <i class="fas ${inv.is_paid ? 'fa-check-circle' : 'fa-clock'}"></i>
+                                    ${inv.is_paid ? 'مدفوعة' : 'غير مدفوعة'}
+                                </button>`;
+                        } else {
+                            badge.innerHTML = `<span class="badge ${inv.is_paid ? 'badge-paid' : 'badge-unpaid'}" style="font-size:11px;">${inv.is_paid ? 'مدفوعة' : 'غير مدفوعة'}</span>`;
+                        }
+                        card.querySelector('.meter-input').appendChild(badge);
+                    }
+                }
             }
         });
     }
     updateTotal();
     renderInvoiceActions();
+}
+
+async function toggleInvoicePaid(invoiceId, newPaidStatus, clientId) {
+    try {
+        await api(`api/invoices.php?action=mark_paid&id=${invoiceId}&paid=${newPaidStatus}`);
+        showToast(newPaidStatus ? 'تم تحديد الفاتورة كمدفوعة ✓' : 'تم تحديد الفاتورة كغير مدفوعة', 'success');
+        loadClientInvoices(clientId);
+        loadSummary();
+    } catch(e) { /* toast shown by api() */ }
 }
 
 function updateTotal() {
@@ -711,18 +748,93 @@ async function generateReport() {
         </div>`;
 
     // Table
+    const isAdmin = typeof APP_ROLE !== 'undefined' && APP_ROLE === 'admin';
     document.getElementById('reportTableHead').innerHTML = `
-        <tr><th>العميل</th><th>الخدمة</th><th>العداد</th><th>المبلغ</th><th>الحالة</th></tr>`;
+        <tr>
+            ${isAdmin ? `<th style="width:40px;"><input type="checkbox" id="selectAllReport" onclick="toggleSelectAllReport(this)" title="تحديد الكل"></th>` : ''}
+            <th>العميل</th><th>الخدمة</th><th>العداد</th><th>المبلغ</th><th>الحالة</th>
+        </tr>`;
 
     document.getElementById('reportTableBody').innerHTML = data.map(r => `
-        <tr>
+        <tr data-invoice-id="${r.id}" class="report-row">
+            ${isAdmin ? `<td><input type="checkbox" class="report-select" value="${r.id}" onchange="updateBulkBar()"></td>` : ''}
             <td><strong>${esc(r.full_name)}</strong></td>
             <td><i class="fas ${r.service_icon}" style="color:${r.service_color};"></i> ${esc(r.service_name)}</td>
             <td>${esc(r.meter_label)} ${r.meter_number ? '<br><small style="color:#919294;">'+esc(r.meter_number)+'</small>' : ''}</td>
             <td style="font-weight:900;direction:ltr;">${parseFloat(r.amount).toFixed(2)} DH</td>
-            <td><span class="badge ${r.is_paid ? 'badge-paid' : 'badge-unpaid'}">${r.is_paid ? 'مدفوعة' : 'غير مدفوعة'}</span></td>
+            <td>
+                ${isAdmin
+                    ? `<button class="btn btn-sm ${r.is_paid ? 'btn-success' : 'btn-danger'}"
+                            style="font-size:11px;padding:3px 10px;border-radius:20px;"
+                            onclick="toggleReportPaid(${r.id}, ${r.is_paid ? 0 : 1}, this)">
+                            <i class="fas ${r.is_paid ? 'fa-check-circle' : 'fa-clock'}"></i>
+                            ${r.is_paid ? 'مدفوعة' : 'غير مدفوعة'}
+                        </button>`
+                    : `<span class="badge ${r.is_paid ? 'badge-paid' : 'badge-unpaid'}">${r.is_paid ? 'مدفوعة' : 'غير مدفوعة'}</span>`
+                }
+            </td>
         </tr>
     `).join('');
+
+    // Reset bulk bar
+    updateBulkBar();
+}
+
+function toggleSelectAllReport(checkbox) {
+    document.querySelectorAll('.report-select').forEach(cb => cb.checked = checkbox.checked);
+    updateBulkBar();
+}
+
+function updateBulkBar() {
+    const selected = document.querySelectorAll('.report-select:checked');
+    const bar = document.getElementById('bulkActionsBar');
+    const count = document.getElementById('bulkSelectionCount');
+    if (!bar) return;
+    if (selected.length > 0) {
+        bar.style.display = 'flex';
+        count.textContent = `تم تحديد ${selected.length} فاتورة`;
+    } else {
+        bar.style.display = 'none';
+    }
+}
+
+function clearBulkSelection() {
+    document.querySelectorAll('.report-select').forEach(cb => cb.checked = false);
+    const selectAll = document.getElementById('selectAllReport');
+    if (selectAll) selectAll.checked = false;
+    updateBulkBar();
+}
+
+async function bulkMarkPaid(isPaid) {
+    const selected = Array.from(document.querySelectorAll('.report-select:checked')).map(cb => parseInt(cb.value));
+    if (selected.length === 0) { showToast('لم يتم تحديد أي فاتورة', 'error'); return; }
+
+    const action = isPaid ? 'تحديد كمدفوعة' : 'تحديد كغير مدفوعة';
+    const ok = await confirmAction(`${action} (${selected.length})`, `هل تريد ${action} لـ ${selected.length} فاتورة/فواتير محددة؟`);
+    if (!ok) return;
+
+    try {
+        const result = await api('api/invoices.php?action=bulk_mark_paid', {
+            method: 'POST',
+            body: JSON.stringify({ ids: selected, paid: isPaid })
+        });
+        showToast(`تم تحديث ${result.updated} فاتورة بنجاح`, 'success');
+        clearBulkSelection();
+        generateReport(); // Refresh
+    } catch(e) { /* toast shown */ }
+}
+
+async function toggleReportPaid(invoiceId, newPaid, btn) {
+    try {
+        await api(`api/invoices.php?action=mark_paid&id=${invoiceId}&paid=${newPaid}`);
+        // Update button in-place
+        btn.className = `btn btn-sm ${newPaid ? 'btn-success' : 'btn-danger'}`;
+        btn.style.cssText = 'font-size:11px;padding:3px 10px;border-radius:20px;';
+        btn.innerHTML = `<i class="fas ${newPaid ? 'fa-check-circle' : 'fa-clock'}"></i> ${newPaid ? 'مدفوعة' : 'غير مدفوعة'}`;
+        btn.setAttribute('onclick', `toggleReportPaid(${invoiceId}, ${newPaid ? 0 : 1}, this)`);
+        showToast(newPaid ? 'تم تحديد الفاتورة كمدفوعة ✓' : 'تم تحديد الفاتورة كغير مدفوعة', 'success');
+        loadSummary();
+    } catch(e) { /* toast shown */ }
 }
 
 function exportReport() {
@@ -963,6 +1075,11 @@ async function fetchRiadForClient(clientId) {
     try {
         const data = await api(`api/riad-proxy.php?action=fetch_client&client_id=${clientId}`);
         riadFetchedData = data.results || [];
+
+        // Check if any result has session expiry error
+        const hasSessionError = riadFetchedData.some(r => isRiadSessionError(r.api_response));
+        if (hasSessionError) showRiadExpiryBanner();
+
         renderRiadResults(riadFetchedData);
     } catch (e) {
         document.getElementById('riadResultsBody').innerHTML = `
@@ -972,6 +1089,52 @@ async function fetchRiadForClient(clientId) {
                 <p style="font-size:13px;">${esc(e.message)}</p>
             </div>`;
     }
+}
+
+function isRiadSessionError(response) {
+    if (!response) return false;
+    if (response.success === false) {
+        const err = (response.error || '').toLowerCase();
+        return err.includes('session') || err.includes('جلسة') || err.includes('expired') ||
+               err.includes('بيانات الاتصال') || err.includes('401') || err.includes('403') ||
+               (response.code && ['401', '403', '100', '099'].includes(String(response.code)));
+    }
+    return false;
+}
+
+function showRiadExpiryBanner() {
+    riadSessionExpired = true;
+    const banner = document.getElementById('riadExpiryBanner');
+    if (banner) {
+        banner.style.display = 'block';
+        // Push main content down
+        const main = document.getElementById('mainContent');
+        if (main) main.style.paddingTop = '50px';
+    }
+}
+
+function hideRiadExpiryBanner() {
+    riadSessionExpired = false;
+    const banner = document.getElementById('riadExpiryBanner');
+    if (banner) {
+        banner.style.display = 'none';
+        const main = document.getElementById('mainContent');
+        if (main) main.style.paddingTop = '';
+    }
+}
+
+function goToRiadSettings() {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelector('[data-page="settings"]')?.classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-settings')?.classList.add('active');
+    document.getElementById('pageTitle').textContent = 'الإعدادات';
+    loadUsersManager(); loadServicesManager(); loadWaTemplate(); loadRiadSession(); loadRiadConfigManager();
+    // Scroll to RIAD section
+    setTimeout(() => {
+        const el = document.getElementById('riadSessionId');
+        if (el) { el.scrollIntoView({ behavior: 'smooth' }); el.focus(); }
+    }, 300);
 }
 
 // -- Fetch single meter --
@@ -985,7 +1148,10 @@ async function fetchRiadForMeter(meterId, nopolice, serviceTypeId) {
 
     try {
         const data = await api(`api/riad-proxy.php?action=fetch&nopolice=${encodeURIComponent(nopolice)}&service_type_id=${serviceTypeId}`);
-        if (data.success && data.invoices && data.invoices.length > 0) {
+        if (isRiadSessionError(data)) {
+            showRiadExpiryBanner();
+            showToast('جلسة RIAD منتهية — حدّث كوكي الجلسة في الإعدادات', 'error');
+        } else if (data.success && data.invoices && data.invoices.length > 0) {
             // Take the first unpaid invoice and fill the amount
             const inv = data.invoices[0];
             const input = document.getElementById(`amount-${meterId}`);
@@ -1130,30 +1296,105 @@ async function resetWaTemplate() {
 // =====================
 // SETTINGS - RIAD SESSION
 // =====================
+let jwtExpiryInterval = null;
+
 async function loadRiadSession() {
     if (APP_ROLE !== 'admin') return;
     try {
         const data = await api('api/riad-proxy.php?action=get_session');
-        const codeInput = document.getElementById('riadCodeEs');
-        const sessionInput = document.getElementById('riadSessionId');
-        if (codeInput && data.code_es) codeInput.value = data.code_es;
-        if (sessionInput && data.session_id) sessionInput.value = data.session_id;
+        const el = (id) => document.getElementById(id);
+
+        if (el('riadCodeEs') && data.code_es) el('riadCodeEs').value = data.code_es;
+        if (el('riadSessionId') && data.session_id) el('riadSessionId').value = data.session_id;
+        if (el('riadJwtToken') && data.jwt_token) el('riadJwtToken').value = data.jwt_token;
+        if (el('riadDeviceName') && data.device_cookie_name) el('riadDeviceName').value = data.device_cookie_name;
+        if (el('riadDeviceValue') && data.device_cookie_value) el('riadDeviceValue').value = data.device_cookie_value;
+        if (el('lastSyncTime') && data.last_sync) el('lastSyncTime').textContent = data.last_sync;
+
+        // Show JWT expiry
+        if (data.jwt_info) {
+            updateJwtExpiryDisplay(data.jwt_info);
+        }
     } catch (e) { /* ignore */ }
+}
+
+function updateJwtExpiryDisplay(jwtInfo) {
+    const display = document.getElementById('jwtExpiryDisplay');
+    const syncStatus = document.getElementById('riadSyncStatus');
+    if (!display) return;
+
+    // Clear old interval
+    if (jwtExpiryInterval) clearInterval(jwtExpiryInterval);
+
+    if (!jwtInfo || !jwtInfo.exp) {
+        display.style.display = 'none';
+        return;
+    }
+
+    function refresh() {
+        const remaining = Math.max(0, jwtInfo.exp - Math.floor(Date.now() / 1000));
+        const mins = Math.floor(remaining / 60);
+        const secs = remaining % 60;
+
+        if (remaining <= 0) {
+            display.style.display = 'flex';
+            display.style.background = '#fef2f2';
+            display.style.color = '#991b1b';
+            display.style.border = '2px solid #ef4444';
+            display.innerHTML = '<i class="fas fa-times-circle" style="font-size:18px;"></i> <span>الجلسة منتهية! أعد المزامنة من riad.m2t.ma</span>';
+            showRiadExpiryBanner();
+            clearInterval(jwtExpiryInterval);
+            return;
+        }
+
+        display.style.display = 'flex';
+        if (remaining < 600) { // < 10 min
+            display.style.background = '#fef3c7';
+            display.style.color = '#92400e';
+            display.style.border = '2px solid #f59e0b';
+            display.innerHTML = `<i class="fas fa-exclamation-triangle" style="font-size:18px;"></i> <span>الجلسة تنتهي خلال: <strong>${mins}:${String(secs).padStart(2,'0')}</strong> — أعد المزامنة قريباً!</span>`;
+        } else {
+            display.style.background = '#d1fae5';
+            display.style.color = '#065f46';
+            display.style.border = '2px solid #10b981';
+            display.innerHTML = `<i class="fas fa-check-circle" style="font-size:18px;"></i> <span>الجلسة صالحة — تنتهي خلال: <strong>${mins} دقيقة</strong></span>`;
+            hideRiadExpiryBanner();
+        }
+    }
+
+    refresh();
+    jwtExpiryInterval = setInterval(refresh, 1000);
 }
 
 async function saveRiadSession() {
     const code = document.getElementById('riadCodeEs').value.trim();
-    const sessionId = document.getElementById('riadSessionId').value.trim();
-
-    if (!code || !sessionId) {
-        showToast('أدخل كود المحل وكوكي الجلسة', 'error');
+    if (!code) {
+        showToast('أدخل كود المحل على الأقل', 'error');
         return;
     }
 
-    await api('api/riad-proxy.php?action=save_session', {
+    const payload = { code_es: code };
+
+    const sessionId = document.getElementById('riadSessionId')?.value.trim();
+    if (sessionId) payload.session_id = sessionId;
+
+    const jwtToken = document.getElementById('riadJwtToken')?.value.trim();
+    if (jwtToken) payload.jwt_token = jwtToken;
+
+    const deviceName = document.getElementById('riadDeviceName')?.value.trim();
+    const deviceValue = document.getElementById('riadDeviceValue')?.value.trim();
+    if (deviceName) payload.device_cookie_name = deviceName;
+    if (deviceValue) payload.device_cookie_value = deviceValue;
+
+    const result = await api('api/riad-proxy.php?action=save_session', {
         method: 'POST',
-        body: JSON.stringify({ code_es: code, session_id: sessionId })
+        body: JSON.stringify(payload)
     });
+
+    if (result.jwt_info) {
+        updateJwtExpiryDisplay(result.jwt_info);
+    }
+
     showToast('تم حفظ بيانات الاتصال بنجاح', 'success');
 }
 
@@ -1175,11 +1416,14 @@ async function testRiadConnection() {
                 <i class="fas fa-check-circle" style="font-size:20px;"></i>
                 <div>${esc(result.message)}</div>
             </div>`;
+            hideRiadExpiryBanner();
+            if (result.jwt_info) updateJwtExpiryDisplay(result.jwt_info);
         } else {
             status.innerHTML = `<div style="color:var(--danger);font-weight:600;padding:12px;background:#fef2f2;border-radius:8px;display:flex;align-items:center;gap:8px;">
                 <i class="fas fa-times-circle" style="font-size:20px;"></i>
                 <div>${esc(result.error)}</div>
             </div>`;
+            showRiadExpiryBanner();
         }
     } catch (e) {
         status.innerHTML = `<div style="color:var(--danger);font-weight:600;padding:10px;background:#fef2f2;border-radius:8px;"><i class="fas fa-times-circle"></i> ${esc(e.message)}</div>`;
@@ -1256,6 +1500,83 @@ async function deleteRiadConfig(id) {
     await api(`api/riad-proxy.php?action=config_delete&id=${id}`);
     showToast('تم الحذف', 'success');
     loadRiadConfigManager();
+}
+
+// =====================
+// BACKUP
+// =====================
+function downloadBackup() {
+    const status = document.getElementById('backupStatus');
+    if (status) status.textContent = 'جاري التنزيل...';
+    const link = document.createElement('a');
+    link.href = 'api/backup.php';
+    link.download = '';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => {
+        if (status) status.textContent = '✓ تم التنزيل - ' + new Date().toLocaleString('ar-MA');
+    }, 1500);
+    showToast('جاري تنزيل النسخة الاحتياطية...', 'success');
+}
+
+// =====================
+// AUDIT LOG
+// =====================
+async function loadAuditLog() {
+    if (APP_ROLE !== 'admin') return;
+    const container = document.getElementById('auditLogContainer');
+    if (!container) return;
+
+    container.innerHTML = '<div style="padding:20px;text-align:center;"><i class="fas fa-spinner fa-spin" style="color:var(--primary);font-size:22px;"></i></div>';
+
+    try {
+        const logs = await api('api/invoices.php?action=audit_log&limit=100');
+
+        const actionLabels = {
+            'save_invoice': { label: 'حفظ فاتورة', icon: 'fa-save', color: '#3b82f6' },
+            'save_batch': { label: 'حفظ دفعة فواتير', icon: 'fa-layer-group', color: '#8b5cf6' },
+            'delete_invoice': { label: 'حذف فاتورة', icon: 'fa-trash', color: '#ef4444' },
+            'mark_paid': { label: 'تحديد كمدفوعة', icon: 'fa-check-circle', color: '#10b981' },
+            'mark_unpaid': { label: 'تحديد كغير مدفوعة', icon: 'fa-times-circle', color: '#f59e0b' },
+            'bulk_mark_paid': { label: 'تحديد جماعي كمدفوعة', icon: 'fa-check-double', color: '#10b981' },
+            'bulk_mark_unpaid': { label: 'تحديد جماعي كغير مدفوعة', icon: 'fa-clock', color: '#f59e0b' },
+            'backup_download': { label: 'تنزيل نسخة احتياطية', icon: 'fa-download', color: '#6b7280' },
+        };
+
+        if (logs.length === 0) {
+            container.innerHTML = '<div style="padding:30px;text-align:center;color:#919294;">لا توجد سجلات بعد</div>';
+            return;
+        }
+
+        container.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+                <tr style="background:#f8f9fa;position:sticky;top:0;">
+                    <th style="padding:10px;text-align:right;border-bottom:2px solid #e8e8e8;">العملية</th>
+                    <th style="padding:10px;text-align:right;border-bottom:2px solid #e8e8e8;">المستخدم</th>
+                    <th style="padding:10px;text-align:right;border-bottom:2px solid #e8e8e8;">التفاصيل</th>
+                    <th style="padding:10px;text-align:right;border-bottom:2px solid #e8e8e8;">التاريخ والوقت</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${logs.map(log => {
+                    const meta = actionLabels[log.action] || { label: log.action, icon: 'fa-circle', color: '#919294' };
+                    return `<tr style="border-bottom:1px solid #f0f0f0;">
+                        <td style="padding:9px 10px;">
+                            <span style="display:inline-flex;align-items:center;gap:6px;background:${meta.color}1a;color:${meta.color};padding:3px 10px;border-radius:20px;font-weight:700;font-size:12px;">
+                                <i class="fas ${meta.icon}"></i> ${meta.label}
+                            </span>
+                        </td>
+                        <td style="padding:9px 10px;font-weight:600;">${esc(log.user_name || '-')}</td>
+                        <td style="padding:9px 10px;color:#6b7280;font-size:12px;direction:ltr;text-align:left;">${esc(log.details || '-')}</td>
+                        <td style="padding:9px 10px;color:#919294;font-size:12px;white-space:nowrap;">${esc(log.created_at || '')}</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+        </table>`;
+    } catch(e) {
+        container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--danger);">خطأ في تحميل السجل</div>';
+    }
 }
 
 // =====================

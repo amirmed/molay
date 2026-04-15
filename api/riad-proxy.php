@@ -3,13 +3,11 @@
  * RIAD M2T API Proxy
  * Fetches unpaid billing data from riad-api.m2t.ma
  *
- * Known operator service IDs:
- * - Electricity (ONEE): fe559a53-e921-4677-a8c4-a6d5f55e82db
- * - Water: can be added when discovered
- *
- * searchCriteria:
- * - "6" = nopolice for electricity
- * - "1" = nopolice for water/other
+ * Authentication: 3 cookies required:
+ *   - token (JWT) - expires every 2 hours
+ *   - X-SESSIONID - server session reference
+ *   - device_XXXXX - device identifier (lasts 3 months)
+ * + Header: x-code-es
  */
 
 require_once __DIR__ . '/../includes/auth.php';
@@ -43,27 +41,80 @@ function setRiadSetting($key, $value) {
     $stmt->execute([$key, $value]);
 }
 
-function getRiadCodeEs() { return getRiadSetting('code_es'); }
+// ----- JWT Decoder -----
+function decodeJwtPayload($jwt) {
+    $parts = explode('.', $jwt);
+    if (count($parts) !== 3) return null;
+    $payload = $parts[1];
+    // Base64url decode
+    $payload = str_replace(['-', '_'], ['+', '/'], $payload);
+    $payload = base64_decode($payload);
+    return json_decode($payload, true);
+}
 
-// ----- Riad Session (copied from browser) -----
+function getJwtExpiry($jwt) {
+    $payload = decodeJwtPayload($jwt);
+    if ($payload && isset($payload['exp'])) {
+        return [
+            'exp' => (int)$payload['exp'],
+            'iat' => (int)($payload['iat'] ?? 0),
+            'sub' => $payload['sub'] ?? '',
+            'remaining' => max(0, (int)$payload['exp'] - time()),
+            'expired' => time() > (int)$payload['exp'],
+        ];
+    }
+    return null;
+}
+
+// ----- Build Cookie String -----
+function buildRiadCookies() {
+    $token = getRiadSetting('jwt_token');
+    $sessionId = getRiadSetting('session_id');
+    $deviceName = getRiadSetting('device_cookie_name');
+    $deviceValue = getRiadSetting('device_cookie_value');
+
+    $cookies = [];
+    if ($sessionId) $cookies[] = 'X-SESSIONID=' . $sessionId;
+    if ($token) $cookies[] = 'token=' . $token;
+    if ($deviceName && $deviceValue) $cookies[] = $deviceName . '=' . $deviceValue;
+
+    return implode('; ', $cookies);
+}
+
+// ----- Riad Session Validation -----
 function getRiadSession() {
     $codeEs = getRiadSetting('code_es');
+    $token = getRiadSetting('jwt_token');
     $sessionId = getRiadSetting('session_id');
 
-    if (empty($codeEs) || empty($sessionId)) {
-        return ['success' => false, 'error' => 'بيانات الاتصال غير مكتملة. اذهب للإعدادات وأدخل كود المحل + كوكي الجلسة.'];
+    if (empty($codeEs)) {
+        return ['success' => false, 'error' => 'كود المحل (x-code-es) غير مُدخل. اذهب للإعدادات.'];
     }
 
-    return ['success' => true, 'session_id' => $sessionId, 'code_es' => $codeEs];
+    if (empty($token) && empty($sessionId)) {
+        return ['success' => false, 'error' => 'بيانات الاتصال غير مكتملة. أدخل بيانات الجلسة في الإعدادات.'];
+    }
+
+    // Check JWT expiry
+    if ($token) {
+        $jwtInfo = getJwtExpiry($token);
+        if ($jwtInfo && $jwtInfo['expired']) {
+            return ['success' => false, 'error' => 'جلسة RIAD منتهية (JWT expired). أعد المزامنة.', 'code' => '401'];
+        }
+    }
+
+    return [
+        'success' => true,
+        'code_es' => $codeEs,
+        'cookie_string' => buildRiadCookies(),
+    ];
 }
 
 // Operator service IDs mapped to our service types
-// Admin can configure these in Settings later
 $OPERATOR_MAP = getOperatorMap();
 
 function getOperatorMap() {
     $db = getDB();
-    // Check if riad_config table exists
     try {
         $stmt = $db->query("SELECT * FROM riad_config");
         $rows = $stmt->fetchAll();
@@ -77,7 +128,6 @@ function getOperatorMap() {
         }
         return $map;
     } catch (Exception $e) {
-        // Create table if not exists
         $db->exec("
             CREATE TABLE IF NOT EXISTS riad_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,7 +139,6 @@ function getOperatorMap() {
                 UNIQUE(service_type_id)
             )
         ");
-        // Insert default for electricity (service_type_id=1 is typically Electricite)
         $stmt = $db->prepare("SELECT id FROM service_types WHERE name LIKE '%lectri%' LIMIT 1");
         $stmt->execute();
         $elec = $stmt->fetch();
@@ -103,7 +152,7 @@ function getOperatorMap() {
 
 switch ($action) {
 
-    // Fetch unpaid bills for a specific meter
+    // ============= FETCH single meter =============
     case 'fetch':
         $nopolice = trim($_GET['nopolice'] ?? '');
         $serviceTypeId = (int)($_GET['service_type_id'] ?? 0);
@@ -116,14 +165,12 @@ switch ($action) {
             break;
         }
 
-        // Get operator config from map or use provided values
         if (!empty($operatorId)) {
-            // Direct operator ID provided
+            // Direct
         } elseif (isset($OPERATOR_MAP[$serviceTypeId])) {
             $operatorId = $OPERATOR_MAP[$serviceTypeId]['operator_id'];
             $searchCriteria = $OPERATOR_MAP[$serviceTypeId]['search_criteria'];
         } else {
-            // Default fallback: electricity
             $operatorId = 'fe559a53-e921-4677-a8c4-a6d5f55e82db';
             $searchCriteria = '6';
         }
@@ -132,7 +179,7 @@ switch ($action) {
         echo json_encode($result);
         break;
 
-    // Fetch bills for ALL meters of a client that have nopolice
+    // ============= FETCH all meters of a client =============
     case 'fetch_client':
         $clientId = (int)($_GET['client_id'] ?? 0);
         if ($clientId <= 0) {
@@ -159,7 +206,6 @@ switch ($action) {
                 $operatorId = $OPERATOR_MAP[$meter['service_type_id']]['operator_id'];
                 $searchCriteria = $OPERATOR_MAP[$meter['service_type_id']]['search_criteria'];
             } else {
-                // Default
                 $operatorId = 'fe559a53-e921-4677-a8c4-a6d5f55e82db';
             }
 
@@ -176,7 +222,7 @@ switch ($action) {
         echo json_encode(['success' => true, 'results' => $results]);
         break;
 
-    // Get Riad API configuration
+    // ============= Config CRUD =============
     case 'config_list':
         requireAdmin();
         $db = getDB();
@@ -189,7 +235,6 @@ switch ($action) {
         echo json_encode($stmt->fetchAll());
         break;
 
-    // Save Riad API configuration
     case 'config_save':
         requireAdmin();
         $data = json_decode(file_get_contents('php://input'), true);
@@ -209,7 +254,6 @@ switch ($action) {
         echo json_encode(['success' => true]);
         break;
 
-    // Delete Riad API configuration
     case 'config_delete':
         requireAdmin();
         $id = (int)($_GET['id'] ?? 0);
@@ -219,51 +263,118 @@ switch ($action) {
         echo json_encode(['success' => true]);
         break;
 
-    // Get saved session info
+    // ============= Session Management =============
     case 'get_session':
         requireAdmin();
+        $token = getRiadSetting('jwt_token');
+        $jwtInfo = $token ? getJwtExpiry($token) : null;
+
         echo json_encode([
             'code_es' => getRiadSetting('code_es'),
             'session_id' => getRiadSetting('session_id'),
+            'jwt_token' => $token,
+            'device_cookie_name' => getRiadSetting('device_cookie_name'),
+            'device_cookie_value' => getRiadSetting('device_cookie_value'),
+            'jwt_info' => $jwtInfo,
+            'last_sync' => getRiadSetting('last_sync'),
         ]);
         break;
 
-    // Save session info
     case 'save_session':
         requireAdmin();
         $data = json_decode(file_get_contents('php://input'), true);
-        $code = trim($data['code_es'] ?? '');
-        $sessionId = trim($data['session_id'] ?? '');
 
-        if (empty($code) || empty($sessionId)) {
-            http_response_code(400);
-            echo json_encode(['error' => 'كود المحل وكوكي الجلسة مطلوبان']);
-            break;
-        }
+        // Support both old format (code_es + session_id) and new format (all fields)
+        if (isset($data['code_es'])) setRiadSetting('code_es', trim($data['code_es']));
+        if (isset($data['session_id'])) setRiadSetting('session_id', trim($data['session_id']));
+        if (isset($data['jwt_token'])) setRiadSetting('jwt_token', trim($data['jwt_token']));
+        if (isset($data['device_cookie_name'])) setRiadSetting('device_cookie_name', trim($data['device_cookie_name']));
+        if (isset($data['device_cookie_value'])) setRiadSetting('device_cookie_value', trim($data['device_cookie_value']));
+        setRiadSetting('last_sync', date('Y-m-d H:i:s'));
 
-        setRiadSetting('code_es', $code);
-        setRiadSetting('session_id', $sessionId);
-        echo json_encode(['success' => true]);
+        // Return JWT info if token was provided
+        $token = getRiadSetting('jwt_token');
+        $jwtInfo = $token ? getJwtExpiry($token) : null;
+
+        echo json_encode(['success' => true, 'jwt_info' => $jwtInfo]);
         break;
 
-    // Test connection
+    // ============= Auto-Sync from Tampermonkey =============
+    case 'auto_sync':
+        requireLogin(); // Any logged-in user can sync (they need to be on riad.m2t.ma)
+        $data = json_decode(file_get_contents('php://input'), true);
+
+        $synced = [];
+
+        // Extract and save all credentials
+        if (!empty($data['code_es'])) {
+            setRiadSetting('code_es', trim($data['code_es']));
+            $synced[] = 'code_es';
+        }
+        if (!empty($data['jwt_token'])) {
+            setRiadSetting('jwt_token', trim($data['jwt_token']));
+            $synced[] = 'jwt_token';
+        }
+        if (!empty($data['session_id'])) {
+            setRiadSetting('session_id', trim($data['session_id']));
+            $synced[] = 'session_id';
+        }
+        if (!empty($data['device_cookie_name']) && !empty($data['device_cookie_value'])) {
+            setRiadSetting('device_cookie_name', trim($data['device_cookie_name']));
+            setRiadSetting('device_cookie_value', trim($data['device_cookie_value']));
+            $synced[] = 'device_cookie';
+        }
+
+        // Auto-save operator config if provided
+        if (!empty($data['operator_service_id']) && !empty($data['service_type_id'])) {
+            $db = getDB();
+            $db->prepare("
+                INSERT INTO riad_config (service_type_id, operator_service_id, search_criteria, label)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(service_type_id) DO UPDATE SET
+                    operator_service_id=excluded.operator_service_id,
+                    search_criteria=excluded.search_criteria
+            ")->execute([
+                (int)$data['service_type_id'],
+                $data['operator_service_id'],
+                $data['search_criteria'] ?? '6',
+                $data['label'] ?? 'Auto-synced'
+            ]);
+            $synced[] = 'operator_config';
+        }
+
+        setRiadSetting('last_sync', date('Y-m-d H:i:s'));
+
+        $token = getRiadSetting('jwt_token');
+        $jwtInfo = $token ? getJwtExpiry($token) : null;
+
+        logAudit('riad_auto_sync', 'riad', null, 'synced: ' . implode(', ', $synced));
+
+        echo json_encode([
+            'success' => true,
+            'synced' => $synced,
+            'jwt_info' => $jwtInfo,
+            'message' => 'تمت المزامنة بنجاح (' . count($synced) . ' عناصر)',
+        ]);
+        break;
+
+    // ============= Test Connection =============
     case 'test':
         requireAdmin();
-        $codeEs = getRiadSetting('code_es');
-        $sessionId = getRiadSetting('session_id');
+        $session = getRiadSession();
 
-        if (empty($codeEs) || empty($sessionId)) {
-            echo json_encode(['success' => false, 'error' => 'أدخل كود المحل وكوكي الجلسة أولاً']);
+        if (!$session['success']) {
+            echo json_encode($session);
             break;
         }
 
-        $ch = curl_init(RIAD_API_BASE . '/auth/current');
+        $ch = curl_init(RIAD_API_BASE . '/ceilings?codeEs=' . urlencode($session['code_es']));
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => [
                 'Accept: application/json',
-                'x-code-es: ' . $codeEs,
-                'Cookie: X-SESSIONID=' . $sessionId,
+                'x-code-es: ' . $session['code_es'],
+                'Cookie: ' . $session['cookie_string'],
             ],
             CURLOPT_TIMEOUT => 10,
             CURLOPT_SSL_VERIFYPEER => false,
@@ -276,9 +387,26 @@ switch ($action) {
         if ($error) {
             echo json_encode(['success' => false, 'error' => 'خطأ في الاتصال: ' . $error]);
         } elseif ($httpCode === 401 || $httpCode === 403) {
-            echo json_encode(['success' => false, 'error' => 'الجلسة منتهية أو غير صالحة. أعد نسخ كوكي الجلسة من المتصفح.']);
+            echo json_encode(['success' => false, 'error' => 'الجلسة منتهية أو غير صالحة (HTTP ' . $httpCode . '). أعد المزامنة.']);
         } elseif ($httpCode >= 200 && $httpCode < 300) {
-            echo json_encode(['success' => true, 'message' => 'الاتصال ناجح! الجلسة صالحة.']);
+            $data = json_decode($response, true);
+            $balance = '';
+            if (isset($data['content'][0]['balance'])) {
+                $balance = ' | الرصيد: ' . number_format($data['content'][0]['balance'], 2) . ' DH';
+            }
+            // Get JWT remaining time
+            $token = getRiadSetting('jwt_token');
+            $jwtInfo = $token ? getJwtExpiry($token) : null;
+            $remaining = '';
+            if ($jwtInfo && isset($jwtInfo['remaining'])) {
+                $mins = floor($jwtInfo['remaining'] / 60);
+                $remaining = " | الجلسة صالحة لمدة: {$mins} دقيقة";
+            }
+            echo json_encode([
+                'success' => true,
+                'message' => 'الاتصال ناجح! الجلسة صالحة.' . $balance . $remaining,
+                'jwt_info' => $jwtInfo,
+            ]);
         } else {
             echo json_encode(['success' => false, 'error' => 'استجابة غير متوقعة (HTTP ' . $httpCode . ')']);
         }
@@ -293,17 +421,13 @@ switch ($action) {
 // Core API call function
 // =====================
 function callRiadAPI($nopolice, $operatorServiceId, $searchCriteria = '6') {
-    // Get active session (auto-login if needed)
-    $sessionResult = getRiadSession();
-    if (!$sessionResult['success']) {
-        return $sessionResult;
+    $session = getRiadSession();
+    if (!$session['success']) {
+        return $session;
     }
 
-    $codeEs = $sessionResult['code_es'] ?? getRiadSetting('code_es');
-    $sessionId = $sessionResult['session_id'];
     $url = RIAD_API_BASE . '/billings/unpaid?operatorServiceId=' . urlencode($operatorServiceId);
 
-    // Generate unique audit number
     $auditNumber = sprintf('%s-%s-%s-%s-%s',
         bin2hex(random_bytes(4)),
         bin2hex(random_bytes(2)),
@@ -328,8 +452,8 @@ function callRiadAPI($nopolice, $operatorServiceId, $searchCriteria = '6') {
         CURLOPT_HTTPHEADER => [
             'Accept: application/json, text/plain, */*',
             'Content-Type: application/json;charset=UTF-8',
-            'x-code-es: ' . $codeEs,
-            'Cookie: X-SESSIONID=' . $sessionId,
+            'x-code-es: ' . $session['code_es'],
+            'Cookie: ' . $session['cookie_string'],
         ],
         CURLOPT_TIMEOUT => 15,
         CURLOPT_SSL_VERIFYPEER => false,
@@ -344,6 +468,10 @@ function callRiadAPI($nopolice, $operatorServiceId, $searchCriteria = '6') {
         return ['success' => false, 'error' => 'Erreur connexion: ' . $error];
     }
 
+    if ($httpCode === 401 || $httpCode === 403) {
+        return ['success' => false, 'error' => 'جلسة RIAD منتهية (HTTP ' . $httpCode . ')', 'code' => (string)$httpCode];
+    }
+
     $data = json_decode($response, true);
     if (!$data) {
         return ['success' => false, 'error' => 'Reponse invalide du serveur', 'http_code' => $httpCode];
@@ -353,11 +481,10 @@ function callRiadAPI($nopolice, $operatorServiceId, $searchCriteria = '6') {
         return ['success' => false, 'error' => $data['errorMsg'] ?? 'Erreur API', 'code' => $data['errorCod']];
     }
 
-    // Parse and simplify the response
+    // Parse invoices
     $invoices = [];
     if (isset($data['listeFactures'])) {
         foreach ($data['listeFactures'] as $fac) {
-            // Parse period: "08/25" => month=8, year=2025
             $period = $fac['dateFacture'] ?? '';
             $month = 0;
             $year = 0;

@@ -31,7 +31,9 @@ switch ($action) {
                 DO UPDATE SET amount=excluded.amount, notes=excluded.notes
             ");
             $stmt->execute([$meterId, $month, $year, $amount, $notes, currentUserId()]);
-            echo json_encode(['success' => true, 'id' => $db->lastInsertId()]);
+            $invId = $db->lastInsertId();
+            logAudit('save_invoice', 'invoice', $invId, "meter=$meterId month=$month/$year amount=$amount");
+            echo json_encode(['success' => true, 'id' => $invId]);
         } catch (Exception $e) {
             http_response_code(500);
             echo json_encode(['error' => $e->getMessage()]);
@@ -66,6 +68,7 @@ switch ($action) {
                 }
             }
             $db->commit();
+            logAudit('save_batch', 'invoice', null, "saved=$saved month=" . ($invoices[0]['month'] ?? '') . "/" . ($invoices[0]['year'] ?? ''));
             echo json_encode(['success' => true, 'saved' => $saved]);
         } catch (Exception $e) {
             $db->rollBack();
@@ -132,7 +135,24 @@ switch ($action) {
         $isPaid = (int)($_GET['paid'] ?? 1);
         $stmt = $db->prepare("UPDATE invoices SET is_paid = ?, paid_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id = ?");
         $stmt->execute([$isPaid, $isPaid, $id]);
+        logAudit($isPaid ? 'mark_paid' : 'mark_unpaid', 'invoice', $id, "paid=$isPaid");
         echo json_encode(['success' => true]);
+        break;
+
+    // Bulk mark as paid
+    case 'bulk_mark_paid':
+        requireAdmin();
+        $data = json_decode(file_get_contents('php://input'), true);
+        $ids = array_map('intval', $data['ids'] ?? []);
+        $isPaid = (int)($data['paid'] ?? 1);
+        if (empty($ids)) { echo json_encode(['success' => true, 'updated' => 0]); break; }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $params = array_merge([$isPaid, $isPaid], $ids);
+        $stmt = $db->prepare("UPDATE invoices SET is_paid = ?, paid_at = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id IN ($placeholders)");
+        $stmt->execute($params);
+        logAudit($isPaid ? 'bulk_mark_paid' : 'bulk_mark_unpaid', 'invoice', null, "ids=" . implode(',', $ids));
+        echo json_encode(['success' => true, 'updated' => count($ids)]);
         break;
 
     // Monthly summary
@@ -193,9 +213,9 @@ switch ($action) {
         }
 
         $stmt = $db->prepare("
-            SELECT c.full_name, c.phone, m.label as meter_label, m.meter_number,
+            SELECT i.id, c.full_name, c.phone, m.label as meter_label, m.meter_number,
                    st.name as service_name, st.icon as service_icon, st.color as service_color,
-                   i.amount, i.is_paid, i.notes
+                   i.amount, i.is_paid, i.paid_at, i.notes
             FROM invoices i
             JOIN meters m ON m.id = i.meter_id
             JOIN clients c ON c.id = m.client_id
@@ -213,7 +233,17 @@ switch ($action) {
         $id = (int)($_GET['id'] ?? 0);
         $stmt = $db->prepare("DELETE FROM invoices WHERE id = ?");
         $stmt->execute([$id]);
+        logAudit('delete_invoice', 'invoice', $id, "id=$id");
         echo json_encode(['success' => true]);
+        break;
+
+    // Audit log
+    case 'audit_log':
+        requireAdmin();
+        $limit = (int)($_GET['limit'] ?? 50);
+        $stmt = $db->prepare("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?");
+        $stmt->execute([$limit]);
+        echo json_encode($stmt->fetchAll());
         break;
 
     default:

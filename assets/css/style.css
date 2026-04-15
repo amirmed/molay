@@ -198,7 +198,9 @@ body {
 .btn-primary:hover { box-shadow: 0 6px 18px rgba(243,142,33,0.4); }
 .btn-secondary { background: var(--secondary-light); color: #555; }
 .btn-success { background: var(--success); color: #fff; }
+.btn-success:hover { background: #059669; box-shadow: 0 4px 12px rgba(16,185,129,0.3); }
 .btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { background: #dc2626; box-shadow: 0 4px 12px rgba(239,68,68,0.3); }
 .btn-outline {
     background: transparent;
     border: 2px dashed var(--secondary);

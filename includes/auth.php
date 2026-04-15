@@ -50,3 +50,18 @@ function requireAdmin() {
 function currentUserId() {
     return $_SESSION['user_id'] ?? null;
 }
+
+function logAudit($action, $entityType, $entityId, $details = '') {
+    try {
+        $db = getDB();
+        $stmt = $db->prepare("INSERT INTO audit_log (action, entity_type, entity_id, user_id, user_name, details) VALUES (?, ?, ?, ?, ?, ?)");
+        $stmt->execute([
+            $action,
+            $entityType,
+            $entityId,
+            $_SESSION['user_id'] ?? null,
+            $_SESSION['full_name'] ?? 'System',
+            $details
+        ]);
+    } catch (Exception $e) { /* silent fail */ }
+}

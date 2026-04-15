@@ -50,8 +50,18 @@ $fullName = $_SESSION['full_name'];
         </div>
     </aside>
 
+    <!-- RIAD Session Expiry Banner -->
+    <div id="riadExpiryBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(135deg,#dc2626,#b91c1c);color:#fff;padding:12px 20px;text-align:center;font-family:'Cairo',sans-serif;font-size:14px;font-weight:700;box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+        <i class="fas fa-exclamation-triangle" style="margin-left:8px;"></i>
+        جلسة RIAD M2T منتهية أو غير صالحة — يرجى تحديث كوكي الجلسة في الإعدادات
+        <button onclick="goToRiadSettings()" style="margin-right:15px;background:rgba(255,255,255,0.2);border:2px solid rgba(255,255,255,0.5);color:#fff;padding:4px 14px;border-radius:20px;cursor:pointer;font-family:'Cairo',sans-serif;font-weight:700;font-size:13px;">
+            <i class="fas fa-cog"></i> الإعدادات
+        </button>
+        <button onclick="document.getElementById('riadExpiryBanner').style.display='none'" style="background:transparent;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:18px;vertical-align:middle;">×</button>
+    </div>
+
     <!-- Main Content -->
-    <main class="main-content">
+    <main class="main-content" id="mainContent">
         <!-- Top Bar -->
         <header class="topbar">
             <button class="menu-toggle" id="menuToggle"><i class="fas fa-bars"></i></button>
@@ -131,6 +141,20 @@ $fullName = $_SESSION['full_name'];
                 </button>
             </div>
             <div class="report-summary" id="reportSummary"></div>
+            <?php if ($role === 'admin'): ?>
+            <div id="bulkActionsBar" style="display:none;background:#f0fdf4;border:2px solid #10b981;border-radius:12px;padding:12px 18px;margin-bottom:15px;align-items:center;gap:12px;flex-wrap:wrap;">
+                <span id="bulkSelectionCount" style="font-weight:700;color:#065f46;"></span>
+                <button class="btn btn-success btn-sm" onclick="bulkMarkPaid(1)">
+                    <i class="fas fa-check-circle"></i> تحديد كمدفوعة
+                </button>
+                <button class="btn btn-sm" style="background:#fee2e2;color:#991b1b;" onclick="bulkMarkPaid(0)">
+                    <i class="fas fa-times-circle"></i> تحديد كغير مدفوعة
+                </button>
+                <button class="btn btn-sm btn-secondary" onclick="clearBulkSelection()">
+                    <i class="fas fa-times"></i> إلغاء التحديد
+                </button>
+            </div>
+            <?php endif; ?>
             <div class="report-table-wrapper">
                 <table class="data-table" id="reportTable">
                     <thead id="reportTableHead"></thead>
@@ -194,25 +218,59 @@ $fullName = $_SESSION['full_name'];
                 <div class="settings-card" style="grid-column: 1 / -1;">
                     <h3><i class="fas fa-cloud-arrow-down"></i> ربط RIAD M2T (استخراج تلقائي)</h3>
 
+                    <!-- Sync Status Banner -->
+                    <div id="riadSyncStatus" style="display:none;border-radius:12px;padding:15px 20px;margin-bottom:20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;"></div>
+
                     <!-- Step 1: Connection -->
                     <div class="riad-setup-section" style="background:#f8f9fa;border-radius:12px;padding:20px;margin-bottom:20px;">
                         <h4 style="margin-bottom:12px;display:flex;align-items:center;gap:8px;">
                             <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;">1</span>
                             بيانات الاتصال بـ RIAD
                         </h4>
-                        <p style="color:#919294;font-size:13px;margin-bottom:15px;">
-                            أدخل كود المحل وكوكي الجلسة من المتصفح. هذه الطريقة <strong>لا تحجز مكان إضافي</strong> في الأجهزة المسموحة.
-                        </p>
+
+                        <!-- Auto-Sync Info -->
+                        <div style="background:#d1fae5;border:2px solid #10b981;border-radius:10px;padding:14px;margin-bottom:18px;font-size:13px;color:#065f46;line-height:1.8;">
+                            <strong><i class="fas fa-magic"></i> مزامنة تلقائية:</strong>
+                            ثبّت سكريبت Tampermonkey ← ابحث عن أي عميل في riad.m2t.ma ← كل البيانات تُحفظ هنا تلقائياً!
+                            <br><span style="font-size:11px;color:#047857;">آخر مزامنة: <span id="lastSyncTime">—</span></span>
+                        </div>
+
                         <div class="form-row" style="margin-bottom:10px;">
                             <div class="form-group" style="margin-bottom:0;">
                                 <label>كود المحل (x-code-es) *</label>
                                 <input type="text" id="riadCodeEs" placeholder="مثال: 006581" style="direction:ltr;text-align:left;font-weight:700;font-size:16px;">
                             </div>
                             <div class="form-group" style="margin-bottom:0;">
-                                <label>كوكي الجلسة (X-SESSIONID) *</label>
-                                <input type="text" id="riadSessionId" placeholder="انسخه من المتصفح وأنت مسجل الدخول" style="direction:ltr;text-align:left;">
+                                <label>X-SESSIONID</label>
+                                <input type="text" id="riadSessionId" placeholder="X-63-1" style="direction:ltr;text-align:left;">
                             </div>
                         </div>
+                        <div class="form-row" style="margin-bottom:10px;">
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>JWT Token</label>
+                                <input type="text" id="riadJwtToken" placeholder="eyJhbGciOi..." style="direction:ltr;text-align:left;font-size:11px;">
+                            </div>
+                        </div>
+
+                        <!-- JWT Expiry Display -->
+                        <div id="jwtExpiryDisplay" style="display:none;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;"></div>
+
+                        <details style="margin-bottom:12px;">
+                            <summary style="font-size:12px;color:#919294;cursor:pointer;"><i class="fas fa-cog"></i> إعدادات متقدمة (Device Cookie)</summary>
+                            <div style="padding:10px 0;">
+                                <div class="form-row">
+                                    <div class="form-group" style="margin-bottom:0;">
+                                        <label>اسم كوكي الجهاز</label>
+                                        <input type="text" id="riadDeviceName" placeholder="device_HE7669" style="direction:ltr;text-align:left;font-size:12px;">
+                                    </div>
+                                    <div class="form-group" style="margin-bottom:0;">
+                                        <label>قيمة كوكي الجهاز</label>
+                                        <input type="text" id="riadDeviceValue" placeholder="UUID..." style="direction:ltr;text-align:left;font-size:12px;">
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+
                         <div style="display:flex;gap:8px;margin-bottom:15px;flex-wrap:wrap;">
                             <button class="btn btn-primary" onclick="saveRiadSession()" style="height:44px;">
                                 <i class="fas fa-save"></i> حفظ
@@ -222,13 +280,6 @@ $fullName = $_SESSION['full_name'];
                             </button>
                         </div>
                         <div id="riadConnectionStatus"></div>
-
-                        <!-- Quick info box -->
-                        <div style="background:#e0f2fe;border-radius:8px;padding:12px;margin-top:10px;font-size:12px;color:#0369a1;line-height:1.8;">
-                            <strong><i class="fas fa-lightbulb"></i> طريقة سريعة:</strong>
-                            سجّل الدخول في riad.m2t.ma ← اضغط F12 ← Application ← Cookies ← انسخ قيمة <code>X-SESSIONID</code>
-                            <br>⚠️ الجلسة تنتهي عند تسجيل الخروج. أعد النسخ عند الحاجة.
-                        </div>
                     </div>
 
                     <!-- Step 2: Services Mapping -->
@@ -247,32 +298,60 @@ $fullName = $_SESSION['full_name'];
                         </button>
                     </div>
 
+                    <!-- RIAD Session Status -->
+                    <div id="riadSessionStatusCard" style="margin-top:15px;display:none;padding:12px 16px;border-radius:10px;font-size:13px;font-weight:600;"></div>
+
                     <!-- Help -->
                     <details style="margin-top:15px;cursor:pointer;">
                         <summary style="font-weight:700;color:var(--primary);font-size:14px;">
                             <i class="fas fa-question-circle"></i> كيف أحصل على هذه المعلومات؟
                         </summary>
                         <div style="padding:15px;background:#fffbeb;border-radius:8px;margin-top:10px;font-size:13px;line-height:2;">
-                            <strong>1. كود المحل (x-code-es):</strong><br>
+                            <strong style="color:var(--success);"><i class="fas fa-magic"></i> الطريقة التلقائية (مُوصى بها):</strong><br>
+                            &nbsp;&nbsp;1. ثبّت إضافة <a href="https://www.tampermonkey.net/" target="_blank" style="color:var(--primary);">Tampermonkey</a> في المتصفح<br>
+                            &nbsp;&nbsp;2. أضف سكريبت MOLAY Sync (متوفر في ملفات المشروع)<br>
+                            &nbsp;&nbsp;3. سجّل الدخول في riad.m2t.ma وابحث عن أي عميل<br>
+                            &nbsp;&nbsp;4. كل البيانات تُحفظ تلقائياً هنا ✅<br>
+                            <br>
+                            <strong>الطريقة اليدوية:</strong><br>
                             &nbsp;&nbsp;• سجّل الدخول في <a href="https://riad.m2t.ma" target="_blank" style="color:var(--primary);">riad.m2t.ma</a><br>
-                            &nbsp;&nbsp;• اضغط F12 ← تبويب <strong>Network</strong> ← ابحث عن فاتورة<br>
-                            &nbsp;&nbsp;• اضغط على أي طلب ← Headers ← ابحث عن <code>x-code-es</code><br>
-                            <br>
-                            <strong>2. كوكي الجلسة (X-SESSIONID):</strong><br>
-                            &nbsp;&nbsp;• وأنت مسجل الدخول في riad.m2t.ma<br>
                             &nbsp;&nbsp;• اضغط F12 ← تبويب <strong>Application</strong> ← <strong>Cookies</strong> ← riad-api.m2t.ma<br>
-                            &nbsp;&nbsp;• انسخ قيمة <code>X-SESSIONID</code><br>
-                            &nbsp;&nbsp;• ⚠️ <strong>مهم:</strong> الجلسة تنتهي عند تسجيل الخروج أو بعد مدة. أعد النسخ إذا توقف الاستخراج.<br>
+                            &nbsp;&nbsp;• انسخ: <code>token</code> (JWT) + <code>X-SESSIONID</code> + <code>device_XXXXX</code><br>
+                            &nbsp;&nbsp;• ⚠️ الـ JWT ينتهي كل <strong>ساعتين</strong>. أعد النسخ عند الانتهاء.<br>
                             <br>
-                            <strong>3. معرّف الخدمة (Operator Service ID):</strong><br>
-                            &nbsp;&nbsp;• في Network ← ابحث عن <code>billings/unpaid</code><br>
-                            &nbsp;&nbsp;• المعرّف في URL بعد <code>operatorServiceId=</code><br>
-                            <br>
-                            <strong>4. Search Criteria:</strong><br>
-                            &nbsp;&nbsp;• <strong>6</strong> = عداد كهرباء ONEE<br>
-                            &nbsp;&nbsp;• <strong>1</strong> = عداد ماء أو خدمات أخرى
+                            <strong>المعرّفات:</strong><br>
+                            &nbsp;&nbsp;• <strong>x-code-es:</strong> في Network ← Headers ← ابحث عن <code>x-code-es</code><br>
+                            &nbsp;&nbsp;• <strong>Operator Service ID:</strong> في URL بعد <code>operatorServiceId=</code><br>
+                            &nbsp;&nbsp;• <strong>Search Criteria:</strong> 6 = كهرباء ONEE | 1 = ماء/أخرى
                         </div>
                     </details>
+                </div>
+                <div class="settings-card" style="grid-column: 1 / -1;">
+                    <h3><i class="fas fa-database" style="color:var(--primary);"></i> النسخ الاحتياطي</h3>
+                    <p style="color:#919294;font-size:13px;margin-bottom:15px;">
+                        قم بتنزيل نسخة احتياطية كاملة من قاعدة البيانات. يُنصح بعمل نسخة احتياطية أسبوعياً.
+                    </p>
+                    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="downloadBackup()">
+                            <i class="fas fa-download"></i> تنزيل نسخة احتياطية
+                        </button>
+                        <span id="backupStatus" style="font-size:13px;color:#919294;"></span>
+                    </div>
+                </div>
+
+                <div class="settings-card" style="grid-column: 1 / -1;">
+                    <h3><i class="fas fa-history" style="color:#6b7280;"></i> سجل النشاطات (Audit Log)</h3>
+                    <p style="color:#919294;font-size:13px;margin-bottom:15px;">
+                        سجل بجميع العمليات التي تمت على الفواتير والبيانات.
+                    </p>
+                    <div style="display:flex;gap:10px;margin-bottom:15px;flex-wrap:wrap;">
+                        <button class="btn btn-primary btn-sm" onclick="loadAuditLog()">
+                            <i class="fas fa-sync"></i> تحديث السجل
+                        </button>
+                    </div>
+                    <div id="auditLogContainer" style="max-height:380px;overflow-y:auto;border:1px solid #e8e8e8;border-radius:10px;">
+                        <div style="padding:30px;text-align:center;color:#919294;">اضغط "تحديث السجل" للعرض</div>
+                    </div>
                 </div>
             </div>
         </section>
